@@ -2,325 +2,296 @@
   'use strict';
 
   var CONFIG = {
-    appName: 'Level Tool',
-    storageKey: 'mdg_level_tool_state',
+    gestureDefinitions: [
+      { id: 'swipe-up', label: 'Swipe Up', aliases: ['swipe-up', 'swipeup', 'up', 'arrowup'] },
+      { id: 'swipe-down', label: 'Swipe Down', aliases: ['swipe-down', 'swipedown', 'down', 'arrowdown'] },
+      { id: 'swipe-left', label: 'Swipe Left', aliases: ['swipe-left', 'swipeleft', 'left', 'arrowleft'] },
+      { id: 'swipe-right', label: 'Swipe Right', aliases: ['swipe-right', 'swiperight', 'right', 'arrowright'] },
+      { id: 'tap', label: 'Tap', aliases: ['tap', 'select', 'enter'] },
+      { id: 'double-tap', label: 'Double Tap', aliases: ['double-tap', 'doubletap', 'double_tap', 'space'] },
+      { id: 'pinch-open', label: 'Pinch Open', aliases: ['pinch-open', 'pinchopen', 'spread', 'zoom-in', 'zoomin'] },
+      { id: 'pinch-close', label: 'Pinch Close', aliases: ['pinch-close', 'pinchclose', 'pinch', 'zoom-out', 'zoomout'] },
+      { id: 'hold', label: 'Hold', aliases: ['hold', 'longpress', 'long-press'] },
+      { id: 'release', label: 'Release', aliases: ['release'] },
+    ],
+    inputEventNames: ['neurabandgesture', 'neurobandgesture', 'emggesture', 'gesturecontrol'],
+    maxLogItems: 8,
+    cardFlashMs: 380,
   };
 
   var state = {
-    currentScreen: 'home',
-    screenHistory: [],
-    isRunning: false,
-    demoMode: false,
-    orientationAvailable: false,
-    currentPitch: 0,
-    currentRoll: 0,
-    rawPitch: 0,
-    rawRoll: 0,
-    calibration: { pitch: 0, roll: 0 },
-    demoTimer: null,
-    orientationHandler: null,
+    listening: false,
+    totalEvents: 0,
+    counters: {},
+    flashTimers: {},
+    aliasToId: {},
   };
 
-  var screens = {};
+  var dom = {
+    grid: null,
+    status: null,
+    totalEvents: null,
+    lastGesture: null,
+    eventLog: null,
+  };
 
-  function collectScreens() {
-    document.querySelectorAll('.screen').forEach(function(screen) {
-      if (screen.id) screens[screen.id] = screen;
+  function normalize(value) {
+    return String(value || '').toLowerCase().trim().replace(/[\s_]+/g, '-');
+  }
+
+  function buildLookup() {
+    CONFIG.gestureDefinitions.forEach(function(gesture) {
+      state.counters[gesture.id] = 0;
+      gesture.aliases.forEach(function(alias) {
+        state.aliasToId[normalize(alias)] = gesture.id;
+      });
     });
   }
 
-  function navigateTo(screenId, options) {
-    options = options || {};
-    if (options.addToHistory !== false && state.currentScreen) {
-      state.screenHistory.push(state.currentScreen);
-    }
-    Object.values(screens).forEach(function(screen) {
-      screen.classList.add('hidden');
+  function collectDom() {
+    dom.grid = document.getElementById('gesture-grid');
+    dom.status = document.getElementById('status-indicator');
+    dom.totalEvents = document.getElementById('total-events');
+    dom.lastGesture = document.getElementById('last-gesture');
+    dom.eventLog = document.getElementById('event-log');
+  }
+
+  function renderGestureCards() {
+    dom.grid.innerHTML = '';
+    CONFIG.gestureDefinitions.forEach(function(gesture) {
+      var card = document.createElement('div');
+      card.className = 'gesture-card';
+      card.id = 'gesture-card-' + gesture.id;
+
+      var name = document.createElement('div');
+      name.className = 'gesture-name';
+      name.textContent = gesture.label;
+
+      var count = document.createElement('div');
+      count.className = 'gesture-count';
+      count.id = 'gesture-count-' + gesture.id;
+      count.textContent = '0';
+
+      card.appendChild(name);
+      card.appendChild(count);
+      dom.grid.appendChild(card);
     });
-    if (screens[screenId]) {
-      screens[screenId].classList.remove('hidden');
-      state.currentScreen = screenId;
-      onScreenEnter(screenId);
-      focusFirst(screens[screenId]);
+  }
+
+  function updateStatus() {
+    dom.status.textContent = state.listening ? 'Listening' : 'Stopped';
+    dom.status.style.color = state.listening ? '#57f2a0' : '#afb6c8';
+  }
+
+  function formatTime(date) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function addLogLine(text) {
+    var item = document.createElement('div');
+    item.className = 'log-item';
+    item.textContent = '[' + formatTime(new Date()) + '] ' + text;
+
+    dom.eventLog.prepend(item);
+    while (dom.eventLog.children.length > CONFIG.maxLogItems) {
+      dom.eventLog.removeChild(dom.eventLog.lastElementChild);
     }
   }
 
-  function navigateBack() {
-    if (state.screenHistory.length > 0) {
-      navigateTo(state.screenHistory.pop(), { addToHistory: false });
+  function activateCard(gestureId) {
+    var card = document.getElementById('gesture-card-' + gestureId);
+    if (!card) return;
+
+    card.classList.add('active');
+    if (state.flashTimers[gestureId]) {
+      clearTimeout(state.flashTimers[gestureId]);
     }
+
+    state.flashTimers[gestureId] = setTimeout(function() {
+      card.classList.remove('active');
+    }, CONFIG.cardFlashMs);
   }
 
-  function focusFirst(container) {
-    var el = container.querySelector('.focusable:not([disabled]):not(.hidden)');
-    if (el) el.focus();
+  function onGestureDetected(gestureId, source) {
+    if (!state.listening || !state.counters[gestureId] && state.counters[gestureId] !== 0) return;
+
+    state.totalEvents += 1;
+    state.counters[gestureId] += 1;
+
+    var countEl = document.getElementById('gesture-count-' + gestureId);
+    if (countEl) countEl.textContent = String(state.counters[gestureId]);
+
+    dom.totalEvents.textContent = String(state.totalEvents);
+    dom.lastGesture.textContent = gestureId;
+    activateCard(gestureId);
+    addLogLine(gestureId + ' from ' + source);
+  }
+
+  function parseGestureName(event) {
+    var detail = event.detail || {};
+    var raw = detail.gesture || detail.name || detail.type || detail.action || event.gesture || event.name || '';
+    var normalized = normalize(raw);
+
+    if (state.aliasToId[normalized]) {
+      return state.aliasToId[normalized];
+    }
+
+    // Some payloads send names with separators already collapsed.
+    var collapsed = normalized.replace(/-/g, '');
+    return state.aliasToId[collapsed] || null;
+  }
+
+  function onGestureEvent(event) {
+    var gestureId = parseGestureName(event);
+    if (!gestureId) {
+      addLogLine('Unknown gesture payload on ' + event.type);
+      return;
+    }
+    onGestureDetected(gestureId, event.type);
+  }
+
+  function startListening() {
+    if (state.listening) return;
+    state.listening = true;
+    CONFIG.inputEventNames.forEach(function(name) {
+      window.addEventListener(name, onGestureEvent);
+    });
+    updateStatus();
+    addLogLine('Gesture listeners started');
+  }
+
+  function stopListening() {
+    if (!state.listening) return;
+    state.listening = false;
+    CONFIG.inputEventNames.forEach(function(name) {
+      window.removeEventListener(name, onGestureEvent);
+    });
+    updateStatus();
+    addLogLine('Gesture listeners stopped');
+  }
+
+  function resetDemo() {
+    state.totalEvents = 0;
+    dom.totalEvents.textContent = '0';
+    dom.lastGesture.textContent = 'None';
+    dom.eventLog.innerHTML = '';
+
+    Object.keys(state.counters).forEach(function(gestureId) {
+      state.counters[gestureId] = 0;
+      var countEl = document.getElementById('gesture-count-' + gestureId);
+      if (countEl) countEl.textContent = '0';
+
+      var card = document.getElementById('gesture-card-' + gestureId);
+      if (card) card.classList.remove('active');
+    });
+
+    addLogLine('Counters reset');
   }
 
   function moveFocus(direction) {
-    var container = screens[state.currentScreen];
-    if (!container) return;
-    var focusables = Array.from(container.querySelectorAll('.focusable:not([disabled]):not(.hidden)'));
-    if (focusables.length === 0) return;
+    var focusables = Array.from(document.querySelectorAll('.focusable:not([disabled]):not(.hidden)'));
+    if (!focusables.length) return;
+
     var current = document.activeElement;
     var index = focusables.indexOf(current);
     if (index === -1) {
-      focusFirst(container);
+      focusables[0].focus();
       return;
     }
+
     var nextIndex;
     if (direction === 'up' || direction === 'left') {
       nextIndex = index > 0 ? index - 1 : focusables.length - 1;
     } else {
       nextIndex = index < focusables.length - 1 ? index + 1 : 0;
     }
+
     focusables[nextIndex].focus();
-    var scrollParent = focusables[nextIndex].closest('.content, .list-container');
-    if (scrollParent) {
-      focusables[nextIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    focusables[nextIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function mapKeyToGesture(key) {
+    switch (key) {
+      case 'ArrowUp': return 'swipe-up';
+      case 'ArrowDown': return 'swipe-down';
+      case 'ArrowLeft': return 'swipe-left';
+      case 'ArrowRight': return 'swipe-right';
+      case 'Enter': return 'tap';
+      case ' ': return 'double-tap';
+      case 'z':
+      case 'Z':
+        return 'pinch-open';
+      case 'x':
+      case 'X':
+        return 'pinch-close';
+      case 'h':
+      case 'H':
+        return 'hold';
+      case 'r':
+      case 'R':
+        return 'release';
+      default:
+        return null;
     }
-  }
-
-  function loadData() {
-    try {
-      var saved = localStorage.getItem(CONFIG.storageKey);
-      if (saved) {
-        var parsed = JSON.parse(saved);
-        if (parsed && parsed.calibration) {
-          state.calibration = parsed.calibration;
-        }
-      }
-    } catch (error) {
-      console.warn('Unable to load saved state', error);
-    }
-  }
-
-  function saveData() {
-    try {
-      localStorage.setItem(CONFIG.storageKey, JSON.stringify({ calibration: state.calibration }));
-    } catch (error) {
-      console.warn('Unable to save state', error);
-    }
-  }
-
-  function updateStatus() {
-    var status = document.getElementById('status-indicator');
-    if (!status) return;
-    if (state.isRunning) {
-      status.textContent = state.demoMode ? 'Demo running' : 'Running';
-      status.style.color = state.demoMode ? '#ffd54f' : '#00ff9d';
-    } else {
-      status.textContent = 'Stopped';
-      status.style.color = '#a0a0b0';
-    }
-  }
-
-  function renderLevel() {
-    var pitch = state.rawPitch - state.calibration.pitch;
-    var roll = state.rawRoll - state.calibration.roll;
-    state.currentPitch = pitch;
-    state.currentRoll = roll;
-
-    var bubble = document.getElementById('bubble');
-    var pitchValue = document.getElementById('pitch-value');
-    var rollValue = document.getElementById('roll-value');
-
-    if (!bubble || !pitchValue || !rollValue) return;
-
-    var maxOffset = 110;
-    var x = Math.max(-maxOffset, Math.min(maxOffset, (roll / 20) * maxOffset));
-    var y = Math.max(-maxOffset, Math.min(maxOffset, (pitch / 20) * maxOffset));
-    bubble.style.transform = 'translate(' + x + 'px, ' + y + 'px)';
-
-    var tiltAmount = Math.max(Math.abs(pitch), Math.abs(roll));
-    var colorClass = tiltAmount < 2 ? 'green' : tiltAmount < 10 ? 'yellow' : 'red';
-    bubble.className = 'bubble ' + colorClass;
-
-    pitchValue.textContent = pitch.toFixed(1) + '°';
-    rollValue.textContent = roll.toFixed(1) + '°';
-    updateStatus();
-  }
-
-  function showToast(message, type) {
-    var toast = document.getElementById('toast');
-    if (!toast) {
-      toast = document.createElement('div');
-      toast.id = 'toast';
-      toast.className = 'toast';
-      document.body.appendChild(toast);
-    }
-    toast.textContent = message;
-    toast.className = 'toast ' + (type || '');
-    toast.style.opacity = '1';
-    clearTimeout(toast.hideTimer);
-    toast.hideTimer = setTimeout(function() {
-      toast.style.opacity = '0';
-    }, 2200);
-  }
-
-  function enableDemoMode() {
-    if (state.demoTimer) return;
-    state.demoMode = true;
-    state.orientationAvailable = false;
-    state.rawPitch = 0;
-    state.rawRoll = 0;
-
-    var start = Date.now();
-    state.demoTimer = setInterval(function() {
-      var t = (Date.now() - start) / 2000;
-      state.rawPitch = Math.sin(t * 1.1) * 8;
-      state.rawRoll = Math.cos(t * 0.9) * 6;
-      renderLevel();
-    }, 100);
-    showToast('Demo mode active', 'warning');
-    updateStatus();
-  }
-
-  function stopDemoMode() {
-    if (state.demoTimer) {
-      clearInterval(state.demoTimer);
-      state.demoTimer = null;
-    }
-    state.demoMode = false;
-  }
-
-  function handleOrientationEvent(event) {
-    if (event.beta == null || event.gamma == null) return;
-    state.orientationAvailable = true;
-    state.rawPitch = event.beta;
-    state.rawRoll = event.gamma;
-    renderLevel();
-  }
-
-  function startSensors() {
-    if (state.isRunning) return;
-    state.isRunning = true;
-    state.demoMode = false;
-
-    function subscribe() {
-      if (state.orientationHandler) {
-        window.removeEventListener('deviceorientation', state.orientationHandler);
-      }
-      state.orientationHandler = handleOrientationEvent;
-      window.addEventListener('deviceorientation', state.orientationHandler);
-      updateStatus();
-      showToast('Sensors started', 'success');
-    }
-
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      DeviceOrientationEvent.requestPermission().then(function(permissionState) {
-        if (permissionState === 'granted') {
-          subscribe();
-        } else {
-          enableDemoMode();
-        }
-      }).catch(function() {
-        enableDemoMode();
-      });
-    } else if (typeof window !== 'undefined' && 'DeviceOrientationEvent' in window) {
-      subscribe();
-    } else {
-      enableDemoMode();
-    }
-  }
-
-  function stopSensors() {
-    if (!state.isRunning) return;
-    state.isRunning = false;
-    if (state.orientationHandler) {
-      window.removeEventListener('deviceorientation', state.orientationHandler);
-      state.orientationHandler = null;
-    }
-    stopDemoMode();
-    updateStatus();
-    showToast('Stopped', 'info');
-  }
-
-  function calibrate() {
-    state.calibration.pitch = state.rawPitch;
-    state.calibration.roll = state.rawRoll;
-    saveData();
-    renderLevel();
-    showToast('Calibrated', 'success');
   }
 
   function handleAction(action) {
     switch (action) {
       case 'start':
-        startSensors();
+        startListening();
         break;
       case 'stop':
-        stopSensors();
+        stopListening();
         break;
-      case 'calibrate':
-        calibrate();
-        break;
-      case 'back':
-        navigateBack();
+      case 'reset':
+        resetDemo();
         break;
       default:
         break;
     }
   }
 
-  function onScreenEnter(screenId) {
-    if (screenId === 'home') {
-      renderLevel();
-    }
-  }
-
   function setupEvents() {
     document.addEventListener('click', function(event) {
       var actionEl = event.target.closest('[data-action]');
-      if (actionEl) {
-        handleAction(actionEl.dataset.action);
-      }
+      if (!actionEl) return;
+      handleAction(actionEl.dataset.action);
     });
 
     document.addEventListener('keydown', function(event) {
-      var active = document.activeElement;
-      var isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
-      if (isInput && !['Escape', 'Enter'].includes(event.key)) return;
+      var key = event.key;
 
-      switch (event.key) {
-        case 'ArrowUp':
-          moveFocus('up');
-          event.preventDefault();
-          break;
-        case 'ArrowDown':
-          moveFocus('down');
-          event.preventDefault();
-          break;
-        case 'ArrowLeft':
-          moveFocus('left');
-          event.preventDefault();
-          break;
-        case 'ArrowRight':
-          moveFocus('right');
-          event.preventDefault();
-          break;
-        case 'Enter':
-          if (isInput) return;
-          if (active && active.classList.contains('focusable')) {
-            active.click();
-          }
-          event.preventDefault();
-          break;
-        case 'Escape':
-          navigateBack();
-          event.preventDefault();
-          break;
+      if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight') {
+        moveFocus(key === 'ArrowUp' ? 'up' : key === 'ArrowDown' ? 'down' : key === 'ArrowLeft' ? 'left' : 'right');
+      }
+
+      if (key === 'Enter') {
+        var active = document.activeElement;
+        if (active && active.classList.contains('focusable')) {
+          active.click();
+        }
+      }
+
+      var mappedGesture = mapKeyToGesture(key);
+      if (mappedGesture) {
+        onGestureDetected(mappedGesture, 'keyboard');
+      }
+
+      if (mappedGesture || key === 'Enter' || key.indexOf('Arrow') === 0) {
+        event.preventDefault();
       }
     });
   }
 
   function init() {
-    collectScreens();
+    buildLookup();
+    collectDom();
+    renderGestureCards();
     setupEvents();
-    loadData();
-    renderLevel();
-    setTimeout(function() {
-      navigateTo('home', { addToHistory: false });
-    }, 100);
+    updateStatus();
+    addLogLine('Ready. Press Start to listen for gesture events.');
+    var first = document.querySelector('.focusable');
+    if (first) first.focus();
   }
 
   if (document.readyState === 'loading') {

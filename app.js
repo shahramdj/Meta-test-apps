@@ -1,302 +1,378 @@
-(function() {
+// Snake Game — MetaDisplay Glasses Webapp
+// Controls: Arrow keys / D-pad (EMG swipe gestures)
+
+(function () {
   'use strict';
 
-  var CONFIG = {
-    gestureDefinitions: [
-      { id: 'swipe-up', label: 'Swipe Up', aliases: ['swipe-up', 'swipeup', 'up', 'arrowup'] },
-      { id: 'swipe-down', label: 'Swipe Down', aliases: ['swipe-down', 'swipedown', 'down', 'arrowdown'] },
-      { id: 'swipe-left', label: 'Swipe Left', aliases: ['swipe-left', 'swipeleft', 'left', 'arrowleft'] },
-      { id: 'swipe-right', label: 'Swipe Right', aliases: ['swipe-right', 'swiperight', 'right', 'arrowright'] },
-      { id: 'tap', label: 'Tap', aliases: ['tap', 'select', 'enter'] },
-      { id: 'double-tap', label: 'Double Tap', aliases: ['double-tap', 'doubletap', 'double_tap', 'space'] },
-      { id: 'pinch-open', label: 'Pinch Open', aliases: ['pinch-open', 'pinchopen', 'spread', 'zoom-in', 'zoomin'] },
-      { id: 'pinch-close', label: 'Pinch Close', aliases: ['pinch-close', 'pinchclose', 'pinch', 'zoom-out', 'zoomout'] },
-      { id: 'hold', label: 'Hold', aliases: ['hold', 'longpress', 'long-press'] },
-      { id: 'release', label: 'Release', aliases: ['release'] },
-    ],
-    inputEventNames: ['neurabandgesture', 'neurobandgesture', 'emggesture', 'gesturecontrol'],
-    maxLogItems: 8,
-    cardFlashMs: 380,
-  };
+  // --- Constants ---
+  const CELL = 20;
+  const CANVAS_W = 560;
+  const CANVAS_H = 460;
+  const COLS = CANVAS_W / CELL;
+  const ROWS = CANVAS_H / CELL;
+  const TICK_MS = 120;
+  const STORAGE_KEY = 'snake_high_scores';
+  const MAX_SCORES = 10;
 
-  var state = {
-    listening: false,
-    totalEvents: 0,
-    counters: {},
-    flashTimers: {},
-    aliasToId: {},
-  };
+  // --- Colors ---
+  const COLOR_BG = '#14141f';
+  const COLOR_GRID = '#1a1a2e';
+  const COLOR_SNAKE_HEAD = '#00ff88';
+  const COLOR_SNAKE_BODY = '#00cc6a';
+  const COLOR_FOOD = '#ff4466';
+  const COLOR_FOOD_GLOW = 'rgba(255, 68, 102, 0.3)';
 
-  var dom = {
-    grid: null,
-    status: null,
-    totalEvents: null,
-    lastGesture: null,
-    eventLog: null,
-  };
+  // --- State ---
+  let snake = [];
+  let dir = { x: 1, y: 0 };
+  let nextDir = { x: 1, y: 0 };
+  let food = null;
+  let score = 0;
+  let running = false;
+  let gameLoop = null;
+  let gameStarted = false;
 
-  function normalize(value) {
-    return String(value || '').toLowerCase().trim().replace(/[\s_]+/g, '-');
+  // --- DOM ---
+  const canvas = document.getElementById('game-canvas');
+  const ctx = canvas.getContext('2d');
+  const scoreDisplay = document.getElementById('score-display');
+  const finalScore = document.getElementById('final-score');
+  const bestScoreLabel = document.getElementById('best-score-label');
+  const gameOverOverlay = document.getElementById('game-over');
+  const homeScreen = document.getElementById('home');
+  const scoresScreen = document.getElementById('scores');
+  const scoresList = document.getElementById('scores-list');
+
+  // --- High Scores ---
+  function loadScores() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    } catch { return []; }
   }
 
-  function buildLookup() {
-    CONFIG.gestureDefinitions.forEach(function(gesture) {
-      state.counters[gesture.id] = 0;
-      gesture.aliases.forEach(function(alias) {
-        state.aliasToId[normalize(alias)] = gesture.id;
-      });
-    });
+  function saveScores(scores) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(scores));
   }
 
-  function collectDom() {
-    dom.grid = document.getElementById('gesture-grid');
-    dom.status = document.getElementById('status-indicator');
-    dom.totalEvents = document.getElementById('total-events');
-    dom.lastGesture = document.getElementById('last-gesture');
-    dom.eventLog = document.getElementById('event-log');
+  function addScore(value) {
+    const scores = loadScores();
+    scores.push({ score: value, date: new Date().toLocaleDateString() });
+    scores.sort((a, b) => b.score - a.score);
+    if (scores.length > MAX_SCORES) scores.length = MAX_SCORES;
+    saveScores(scores);
+    return scores;
   }
 
-  function renderGestureCards() {
-    dom.grid.innerHTML = '';
-    CONFIG.gestureDefinitions.forEach(function(gesture) {
-      var card = document.createElement('div');
-      card.className = 'gesture-card';
-      card.id = 'gesture-card-' + gesture.id;
-
-      var name = document.createElement('div');
-      name.className = 'gesture-name';
-      name.textContent = gesture.label;
-
-      var count = document.createElement('div');
-      count.className = 'gesture-count';
-      count.id = 'gesture-count-' + gesture.id;
-      count.textContent = '0';
-
-      card.appendChild(name);
-      card.appendChild(count);
-      dom.grid.appendChild(card);
-    });
+  function getBestScore() {
+    const scores = loadScores();
+    return scores.length > 0 ? scores[0].score : 0;
   }
 
-  function updateStatus() {
-    dom.status.textContent = state.listening ? 'Listening' : 'Stopped';
-    dom.status.style.color = state.listening ? '#57f2a0' : '#afb6c8';
-  }
-
-  function formatTime(date) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  }
-
-  function addLogLine(text) {
-    var item = document.createElement('div');
-    item.className = 'log-item';
-    item.textContent = '[' + formatTime(new Date()) + '] ' + text;
-
-    dom.eventLog.prepend(item);
-    while (dom.eventLog.children.length > CONFIG.maxLogItems) {
-      dom.eventLog.removeChild(dom.eventLog.lastElementChild);
+  // --- Rendering ---
+  function drawGrid() {
+    ctx.fillStyle = COLOR_BG;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.strokeStyle = COLOR_GRID;
+    ctx.lineWidth = 0.5;
+    for (let x = 0; x <= CANVAS_W; x += CELL) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, CANVAS_H);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= CANVAS_H; y += CELL) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(CANVAS_W, y);
+      ctx.stroke();
     }
   }
 
-  function activateCard(gestureId) {
-    var card = document.getElementById('gesture-card-' + gestureId);
-    if (!card) return;
-
-    card.classList.add('active');
-    if (state.flashTimers[gestureId]) {
-      clearTimeout(state.flashTimers[gestureId]);
+  function drawSnake() {
+    for (let i = snake.length - 1; i >= 0; i--) {
+      const seg = snake[i];
+      const isHead = i === 0;
+      ctx.fillStyle = isHead ? COLOR_SNAKE_HEAD : COLOR_SNAKE_BODY;
+      const pad = isHead ? 1 : 2;
+      ctx.beginPath();
+      ctx.roundRect(
+        seg.x * CELL + pad,
+        seg.y * CELL + pad,
+        CELL - pad * 2,
+        CELL - pad * 2,
+        isHead ? 4 : 3
+      );
+      ctx.fill();
     }
-
-    state.flashTimers[gestureId] = setTimeout(function() {
-      card.classList.remove('active');
-    }, CONFIG.cardFlashMs);
   }
 
-  function onGestureDetected(gestureId, source) {
-    if (!state.listening || !state.counters[gestureId] && state.counters[gestureId] !== 0) return;
-
-    state.totalEvents += 1;
-    state.counters[gestureId] += 1;
-
-    var countEl = document.getElementById('gesture-count-' + gestureId);
-    if (countEl) countEl.textContent = String(state.counters[gestureId]);
-
-    dom.totalEvents.textContent = String(state.totalEvents);
-    dom.lastGesture.textContent = gestureId;
-    activateCard(gestureId);
-    addLogLine(gestureId + ' from ' + source);
+  function drawFood() {
+    if (!food) return;
+    const cx = food.x * CELL + CELL / 2;
+    const cy = food.y * CELL + CELL / 2;
+    // Glow
+    ctx.fillStyle = COLOR_FOOD_GLOW;
+    ctx.beginPath();
+    ctx.arc(cx, cy, CELL * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+    // Food
+    ctx.fillStyle = COLOR_FOOD;
+    ctx.beginPath();
+    ctx.arc(cx, cy, CELL * 0.35, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  function parseGestureName(event) {
-    var detail = event.detail || {};
-    var raw = detail.gesture || detail.name || detail.type || detail.action || event.gesture || event.name || '';
-    var normalized = normalize(raw);
-
-    if (state.aliasToId[normalized]) {
-      return state.aliasToId[normalized];
+  function drawIdle() {
+    drawGrid();
+    // Draw a small snake in the center as preview
+    const previewSnake = [
+      { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) },
+      { x: Math.floor(COLS / 2) - 1, y: Math.floor(ROWS / 2) },
+      { x: Math.floor(COLS / 2) - 2, y: Math.floor(ROWS / 2) },
+    ];
+    for (let i = 0; i < previewSnake.length; i++) {
+      const seg = previewSnake[i];
+      ctx.fillStyle = i === 0 ? COLOR_SNAKE_HEAD : COLOR_SNAKE_BODY;
+      const pad = i === 0 ? 1 : 2;
+      ctx.beginPath();
+      ctx.roundRect(seg.x * CELL + pad, seg.y * CELL + pad, CELL - pad * 2, CELL - pad * 2, i === 0 ? 4 : 3);
+      ctx.fill();
     }
-
-    // Some payloads send names with separators already collapsed.
-    var collapsed = normalized.replace(/-/g, '');
-    return state.aliasToId[collapsed] || null;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '600 18px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Press New Game to start', CANVAS_W / 2, ROWS * CELL - 30);
   }
 
-  function onGestureEvent(event) {
-    var gestureId = parseGestureName(event);
-    if (!gestureId) {
-      addLogLine('Unknown gesture payload on ' + event.type);
-      return;
+  function render() {
+    drawGrid();
+    drawFood();
+    drawSnake();
+  }
+
+  // --- Game Logic ---
+  function spawnFood() {
+    const occupied = new Set(snake.map(s => s.x + ',' + s.y));
+    let attempts = 0;
+    while (attempts < 1000) {
+      const x = Math.floor(Math.random() * COLS);
+      const y = Math.floor(Math.random() * ROWS);
+      if (!occupied.has(x + ',' + y)) {
+        food = { x, y };
+        return;
+      }
+      attempts++;
     }
-    onGestureDetected(gestureId, event.type);
   }
 
-  function startListening() {
-    if (state.listening) return;
-    state.listening = true;
-    CONFIG.inputEventNames.forEach(function(name) {
-      window.addEventListener(name, onGestureEvent);
-    });
-    updateStatus();
-    addLogLine('Gesture listeners started');
+  function resetGame() {
+    const startX = Math.floor(COLS / 2);
+    const startY = Math.floor(ROWS / 2);
+    snake = [
+      { x: startX, y: startY },
+      { x: startX - 1, y: startY },
+      { x: startX - 2, y: startY },
+    ];
+    dir = { x: 1, y: 0 };
+    nextDir = { x: 1, y: 0 };
+    score = 0;
+    scoreDisplay.textContent = 'Score: 0';
+    spawnFood();
   }
 
-  function stopListening() {
-    if (!state.listening) return;
-    state.listening = false;
-    CONFIG.inputEventNames.forEach(function(name) {
-      window.removeEventListener(name, onGestureEvent);
-    });
-    updateStatus();
-    addLogLine('Gesture listeners stopped');
-  }
+  function tick() {
+    dir = { ...nextDir };
+    const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
 
-  function resetDemo() {
-    state.totalEvents = 0;
-    dom.totalEvents.textContent = '0';
-    dom.lastGesture.textContent = 'None';
-    dom.eventLog.innerHTML = '';
-
-    Object.keys(state.counters).forEach(function(gestureId) {
-      state.counters[gestureId] = 0;
-      var countEl = document.getElementById('gesture-count-' + gestureId);
-      if (countEl) countEl.textContent = '0';
-
-      var card = document.getElementById('gesture-card-' + gestureId);
-      if (card) card.classList.remove('active');
-    });
-
-    addLogLine('Counters reset');
-  }
-
-  function moveFocus(direction) {
-    var focusables = Array.from(document.querySelectorAll('.focusable:not([disabled]):not(.hidden)'));
-    if (!focusables.length) return;
-
-    var current = document.activeElement;
-    var index = focusables.indexOf(current);
-    if (index === -1) {
-      focusables[0].focus();
+    // Wall collision
+    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
+      gameOver();
       return;
     }
 
-    var nextIndex;
-    if (direction === 'up' || direction === 'left') {
-      nextIndex = index > 0 ? index - 1 : focusables.length - 1;
+    // Self collision
+    for (let i = 0; i < snake.length; i++) {
+      if (snake[i].x === head.x && snake[i].y === head.y) {
+        gameOver();
+        return;
+      }
+    }
+
+    snake.unshift(head);
+
+    // Eat food
+    if (food && head.x === food.x && head.y === food.y) {
+      score += 10;
+      scoreDisplay.textContent = 'Score: ' + score;
+      spawnFood();
     } else {
-      nextIndex = index < focusables.length - 1 ? index + 1 : 0;
+      snake.pop();
     }
 
-    focusables[nextIndex].focus();
-    focusables[nextIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    render();
   }
 
-  function mapKeyToGesture(key) {
-    switch (key) {
-      case 'ArrowUp': return 'swipe-up';
-      case 'ArrowDown': return 'swipe-down';
-      case 'ArrowLeft': return 'swipe-left';
-      case 'ArrowRight': return 'swipe-right';
-      case 'Enter': return 'tap';
-      case ' ': return 'double-tap';
-      case 'z':
-      case 'Z':
-        return 'pinch-open';
-      case 'x':
-      case 'X':
-        return 'pinch-close';
-      case 'h':
-      case 'H':
-        return 'hold';
-      case 'r':
-      case 'R':
-        return 'release';
-      default:
-        return null;
+  function startGame() {
+    if (gameLoop) clearInterval(gameLoop);
+    gameOverOverlay.classList.add('hidden');
+    resetGame();
+    running = true;
+    gameStarted = true;
+    render();
+    gameLoop = setInterval(tick, TICK_MS);
+  }
+
+  function gameOver() {
+    running = false;
+    gameStarted = false;
+    if (gameLoop) {
+      clearInterval(gameLoop);
+      gameLoop = null;
     }
-  }
 
-  function handleAction(action) {
-    switch (action) {
-      case 'start':
-        startListening();
-        break;
-      case 'stop':
-        stopListening();
-        break;
-      case 'reset':
-        resetDemo();
-        break;
-      default:
-        break;
+    const best = getBestScore();
+    addScore(score);
+
+    finalScore.textContent = score;
+    if (score > best && score > 0) {
+      bestScoreLabel.textContent = 'New High Score!';
+    } else {
+      bestScoreLabel.textContent = 'Best: ' + Math.max(best, score);
     }
+
+    gameOverOverlay.classList.remove('hidden');
+    // Focus play again button
+    const playAgainBtn = gameOverOverlay.querySelector('[data-action="start-game"]');
+    if (playAgainBtn) playAgainBtn.focus();
   }
 
-  function setupEvents() {
-    document.addEventListener('click', function(event) {
-      var actionEl = event.target.closest('[data-action]');
-      if (!actionEl) return;
-      handleAction(actionEl.dataset.action);
+  // --- Screen Navigation ---
+  function showScreen(id) {
+    [homeScreen, scoresScreen].forEach(s => s.classList.add('hidden'));
+    document.getElementById(id).classList.remove('hidden');
+  }
+
+  function renderScoresList() {
+    const scores = loadScores();
+    scoresList.innerHTML = '';
+
+    if (scores.length === 0) {
+      scoresList.innerHTML = '<div class="empty-state">No scores yet. Play a game!</div>';
+      return;
+    }
+
+    scores.forEach((entry, i) => {
+      const rankClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+      const item = document.createElement('button');
+      item.className = 'list-item focusable';
+      item.tabIndex = 0;
+      item.innerHTML =
+        '<span class="list-item-rank ' + rankClass + '">' + (i + 1) + '</span>' +
+        '<span class="list-item-content">' +
+          '<span class="list-item-title">' + entry.date + '</span>' +
+        '</span>' +
+        '<span class="list-item-badge">' + entry.score + '</span>';
+      scoresList.appendChild(item);
     });
+  }
 
-    document.addEventListener('keydown', function(event) {
-      var key = event.key;
+  // --- Input ---
+  document.addEventListener('keydown', function (e) {
+    if (!running) return;
 
-      if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight') {
-        moveFocus(key === 'ArrowUp' ? 'up' : key === 'ArrowDown' ? 'down' : key === 'ArrowLeft' ? 'left' : 'right');
-      }
+    switch (e.key) {
+      case 'ArrowUp':
+        if (dir.y !== 1) nextDir = { x: 0, y: -1 };
+        e.preventDefault();
+        break;
+      case 'ArrowDown':
+        if (dir.y !== -1) nextDir = { x: 0, y: 1 };
+        e.preventDefault();
+        break;
+      case 'ArrowLeft':
+        if (dir.x !== 1) nextDir = { x: -1, y: 0 };
+        e.preventDefault();
+        break;
+      case 'ArrowRight':
+        if (dir.x !== -1) nextDir = { x: 1, y: 0 };
+        e.preventDefault();
+        break;
+    }
+  });
 
-      if (key === 'Enter') {
-        var active = document.activeElement;
-        if (active && active.classList.contains('focusable')) {
-          active.click();
+  // --- Actions ---
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+
+    switch (btn.dataset.action) {
+      case 'start-game':
+        showScreen('home');
+        startGame();
+        break;
+      case 'view-scores':
+        if (running) {
+          clearInterval(gameLoop);
+          gameLoop = null;
+          running = false;
         }
-      }
+        renderScoresList();
+        showScreen('scores');
+        break;
+      case 'back':
+        showScreen('home');
+        if (gameStarted && !running) {
+          // Resume if game was paused
+          running = true;
+          gameLoop = setInterval(tick, TICK_MS);
+        } else if (!gameStarted) {
+          drawIdle();
+        }
+        break;
+      case 'dismiss-overlay':
+        gameOverOverlay.classList.add('hidden');
+        drawIdle();
+        break;
+      case 'clear-scores':
+        saveScores([]);
+        renderScoresList();
+        break;
+    }
+  });
 
-      var mappedGesture = mapKeyToGesture(key);
-      if (mappedGesture) {
-        onGestureDetected(mappedGesture, 'keyboard');
-      }
+  // --- Focus management for D-pad ---
+  const focusableSelector = '.focusable:not(.hidden *)';
 
-      if (mappedGesture || key === 'Enter' || key.indexOf('Arrow') === 0) {
-        event.preventDefault();
-      }
+  function getVisibleFocusables() {
+    return Array.from(document.querySelectorAll(focusableSelector)).filter(function (el) {
+      return el.offsetParent !== null;
     });
   }
 
-  function init() {
-    buildLookup();
-    collectDom();
-    renderGestureCards();
-    setupEvents();
-    updateStatus();
-    addLogLine('Ready. Press Start to listen for gesture events.');
-    var first = document.querySelector('.focusable');
-    if (first) first.focus();
-  }
+  document.addEventListener('keydown', function (e) {
+    if (running) return; // Game handles arrows when running
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+    const focusables = getVisibleFocusables();
+    if (focusables.length === 0) return;
+
+    const current = document.activeElement;
+    const idx = focusables.indexOf(current);
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const next = idx < focusables.length - 1 ? idx + 1 : 0;
+      focusables[next].focus();
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const prev = idx > 0 ? idx - 1 : focusables.length - 1;
+      focusables[prev].focus();
+    } else if (e.key === 'Enter') {
+      if (current && current.click) current.click();
+    }
+  });
+
+  // --- Init ---
+  drawIdle();
+  const firstBtn = document.querySelector('.nav-item.primary');
+  if (firstBtn) firstBtn.focus();
 })();

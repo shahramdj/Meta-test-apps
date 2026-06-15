@@ -3,50 +3,51 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
-  <meta name="description" content="Spirit level tool for Meta Display Glasses with pitch/roll readout, calibration, and demo mode.">
+  <meta name="description" content="Neuraband gesture demo for Meta Display Glasses showing live gesture detection and simple visual feedback.">
   <meta name="mrbd-web-app-capable" content="yes">
-  <title>Level Tool</title>
+  <title>Neuraband Gesture Demo</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="app">
     <div id="home" class="screen">
       <header class="header">
-        <h1>Level Tool</h1>
-        <span id="status-indicator" class="header-meta">Ready</span>
+        <h1>Neuraband Gestures</h1>
+        <span class="header-meta" id="status-indicator">Stopped</span>
       </header>
-      <div class="content">
-        <div class="level-card card">
-          <div class="level-ring">
-            <div id="bubble" class="bubble green"></div>
-            <div class="level-center"></div>
-          </div>
-          <div class="level-caption">Bubble drifts toward the tilt direction</div>
-        </div>
 
-        <div class="sensor-grid">
-          <div class="sensor-card card focusable" tabindex="0" data-action="noop">
-            <div class="sensor-label">Pitch</div>
-            <div id="pitch-value" class="sensor-value">0.0°</div>
+      <main class="content">
+        <section class="card">
+          <div class="section-title">Live Feedback</div>
+          <div class="feedback-row">
+            <div>
+              <div class="feedback-label">Last Gesture</div>
+              <div class="feedback-value" id="last-gesture">None</div>
+            </div>
+            <div>
+              <div class="feedback-label">Total Events</div>
+              <div class="feedback-value" id="total-events">0</div>
+            </div>
           </div>
-          <div class="sensor-card card focusable" tabindex="0" data-action="noop">
-            <div class="sensor-label">Roll</div>
-            <div id="roll-value" class="sensor-value">0.0°</div>
-          </div>
-        </div>
+          <div class="hint">Use your Neuraband, or press arrow keys and Enter/Space to simulate.</div>
+        </section>
 
-        <div class="notes card">
-          <div class="note-line">Calibrate current orientation as zero with the button below.</div>
-          <div class="note-line">If sensors are unavailable, demo mode will simulate gentle tilt.</div>
-        </div>
-      </div>
+        <section class="gesture-grid" id="gesture-grid"></section>
+
+        <section class="card log-card">
+          <div class="section-title">Recent Activity</div>
+          <div id="event-log" class="event-log"></div>
+        </section>
+      </main>
+
       <nav class="nav-bar">
         <button class="nav-item focusable primary" data-action="start">Start</button>
-        <button class="nav-item focusable" data-action="calibrate">Calibrate</button>
-        <button class="nav-item focusable danger" data-action="stop">Stop</button>
+        <button class="nav-item focusable" data-action="stop">Stop</button>
+        <button class="nav-item focusable" data-action="reset">Reset</button>
       </nav>
     </div>
   </div>
+
   <script src="app.js"></script>
 </body>
 </html>

@@ -3,51 +3,54 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
-  <meta name="description" content="Neuraband gesture demo for Meta Display Glasses showing live gesture detection and simple visual feedback.">
+  <meta name="description" content="Classic Snake game for Meta Ray-Ban Display Glasses, controlled with D-pad navigation.">
   <meta name="mrbd-web-app-capable" content="yes">
-  <title>Neuraband Gesture Demo</title>
+  <title>Snake</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="app">
+    <!-- Main game screen -->
     <div id="home" class="screen">
       <header class="header">
-        <h1>Neuraband Gestures</h1>
-        <span class="header-meta" id="status-indicator">Stopped</span>
+        <h1>Snake</h1>
+        <span class="header-meta" id="score-display">Score: 0</span>
       </header>
-
-      <main class="content">
-        <section class="card">
-          <div class="section-title">Live Feedback</div>
-          <div class="feedback-row">
-            <div>
-              <div class="feedback-label">Last Gesture</div>
-              <div class="feedback-value" id="last-gesture">None</div>
-            </div>
-            <div>
-              <div class="feedback-label">Total Events</div>
-              <div class="feedback-value" id="total-events">0</div>
-            </div>
-          </div>
-          <div class="hint">Use your Neuraband, or press arrow keys and Enter/Space to simulate.</div>
-        </section>
-
-        <section class="gesture-grid" id="gesture-grid"></section>
-
-        <section class="card log-card">
-          <div class="section-title">Recent Activity</div>
-          <div id="event-log" class="event-log"></div>
-        </section>
-      </main>
-
+      <div class="content game-content">
+        <canvas id="game-canvas" width="560" height="460"></canvas>
+      </div>
       <nav class="nav-bar">
-        <button class="nav-item focusable primary" data-action="start">Start</button>
-        <button class="nav-item focusable" data-action="stop">Stop</button>
-        <button class="nav-item focusable" data-action="reset">Reset</button>
+        <button class="nav-item focusable primary" data-action="start-game">New Game</button>
+        <button class="nav-item focusable" data-action="view-scores">High Scores</button>
+      </nav>
+    </div>
+
+    <!-- Game Over overlay -->
+    <div id="game-over" class="overlay hidden">
+      <div class="overlay-content">
+        <div class="game-over-title">Game Over</div>
+        <div class="game-over-score" id="final-score">0</div>
+        <div class="game-over-label">points</div>
+        <div class="game-over-best" id="best-score-label"></div>
+        <button class="nav-item focusable primary overlay-btn" data-action="start-game">Play Again</button>
+        <button class="nav-item focusable overlay-btn" data-action="dismiss-overlay">Back</button>
+      </div>
+    </div>
+
+    <!-- High Scores screen -->
+    <div id="scores" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1>High Scores</h1>
+      </header>
+      <div class="content">
+        <div class="list-container" id="scores-list"></div>
+      </div>
+      <nav class="nav-bar">
+        <button class="nav-item focusable danger" data-action="clear-scores">Clear Scores</button>
       </nav>
     </div>
   </div>
-
   <script src="app.js"></script>
 </body>
 </html>
